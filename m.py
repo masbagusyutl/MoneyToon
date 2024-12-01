@@ -6,6 +6,21 @@ from datetime import datetime, timedelta
 # Inisialisasi Colorama
 init(autoreset=True)
 
+# Konstanta
+BASE_URL = "https://mt.promptale.io"
+HEADERS_TEMPLATE = {
+    "accept": "application/json, text/plain, */*",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+}
+GAMES = {
+    "NAMES": ["MahJong", "Matching", "Sliding"],
+    "LEVELS": ["easy", "medium", "hard"],
+    "REQUIREMENTS": {
+        "medium": 1,  # Jumlah teman yang dibutuhkan
+        "hard": 3
+    }
+}
+
 # Fungsi untuk mencetak pesan selamat datang
 def print_welcome_message():
     print(Fore.WHITE + r"""
@@ -46,184 +61,238 @@ def translate_message(message, target_language="id"):
         print(Fore.RED + f"❌ Kesalahan saat menerjemahkan pesan: {e}")
         return message  # Jika gagal menerjemahkan, kembalikan pesan asli
 
-# Fungsi untuk mengambil daftar tugas
-def fetch_tasks(authorization, cookie):
-    """Mengambil daftar tugas untuk akun tertentu."""
-    headers = {
-        "authorization": authorization,
-        "cookie": cookie,
-        "accept": "application/json, text/plain, */*",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    }
+def retry_request(func, retries=2, delay=2):
+    """Retry request untuk menangani kegagalan sementara."""
+    for attempt in range(retries):
+        try:
+            return func()
+        except requests.RequestException as e:
+            print(Fore.RED + f"❌ Kesalahan: {e}. Percobaan ulang ({attempt + 1}/{retries})...")
+            time.sleep(delay)
+    return None
 
+def check_and_attend(auth, cookie):
+    """Memeriksa dan melakukan absensi jika belum dilakukan."""
+    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
     try:
-        print(Fore.YELLOW + "🔄 Mengambil daftar tugas...")
-        response = requests.get("https://mt.promptale.io/tasks", headers=headers)
-        if response.status_code == 200:
-            tasks = response.json().get("data", [])
-            print(Fore.CYAN + f"✅ {len(tasks)} tugas ditemukan.")
-            
-            # Proses setiap tugas
-            for task in tasks:
-                task_idx = task.get("taskIdx")
-                task_title = task.get("taskMainTitle")
-                run_status = task.get("runStatus")
-                complete_count = task.get("completeCount", 0)
-                
-                # Log informasi tugas
-                print(Fore.MAGENTA + f"Tugas: {task_title}, Status: {run_status}, Penyelesaian: {complete_count}")
-
-                # Melewati tugas yang sudah selesai
-                if complete_count > 0:
-                    print(Fore.GREEN + f"✅ Tugas {task_title} sudah selesai. Melewati...")
-                    continue
-
-                # Jika tugas sudah dijalankan (runStatus: "S"), selesaikan tugas
-                if run_status == "S":
-                    print(Fore.BLUE + f"🔄 Menyelesaikan tugas: {task_title} (taskIdx: {task_idx})")
-                    complete_task(authorization, cookie, task_idx)
-                else:
-                    print(Fore.YELLOW + f"🔄 Menjalankan tugas baru: {task_title} (taskIdx: {task_idx})")
-                    run_task(authorization, cookie, task_idx)
-                time.sleep(2)  # Jeda 2 detik antara tugas
-        else:
-            print(Fore.RED + f"❌ Gagal mengambil daftar tugas. Status Code: {response.status_code}")
-    except requests.RequestException as e:
-        print(Fore.RED + f"❌ Kesalahan saat mengambil daftar tugas: {e}")
-
-# Fungsi untuk menjalankan tugas berdasarkan taskIdx
-def run_task(authorization, cookie, task_idx):
-    """Menjalankan tugas berdasarkan taskIdx."""
-    headers = {
-        "authorization": authorization,
-        "cookie": cookie,
-        "accept": "application/json, text/plain, */*",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "content-type": "application/json"
-    }
-
-    payload = {"taskIdx": task_idx}
-    try:
-        print(Fore.YELLOW + f"🔄 Menjalankan tugas dengan taskIdx: {task_idx}...")
-        response = requests.post("https://mt.promptale.io/tasks/taskRun", json=payload, headers=headers)
-        if response.status_code == 201:
-            message = response.json().get("message", "Tidak ada pesan.")
-            print(Fore.GREEN + f"✅ Tugas berhasil dijalankan. Pesan: {translate_message(message)}")
-        else:
-            print(Fore.RED + f"❌ Gagal menjalankan tugas. Status Code: {response.status_code}")
-    except requests.RequestException as e:
-        print(Fore.RED + f"❌ Kesalahan saat menjalankan tugas: {e}")
-
-# Fungsi untuk menyelesaikan tugas yang sudah dijalankan
-def complete_task(authorization, cookie, task_idx):
-    """Menandai tugas sebagai selesai jika sudah dijalankan (runStatus: 'S')."""
-    headers = {
-        "authorization": authorization,
-        "cookie": cookie,
-        "accept": "application/json, text/plain, */*",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "content-type": "application/json"
-    }
-
-    payload = {"taskIdx": task_idx}
-    try:
-        print(Fore.YELLOW + f"🔄 Menyelesaikan tugas dengan taskIdx: {task_idx}...")
-        response = requests.post("https://mt.promptale.io/tasks/taskComplete", json=payload, headers=headers)
-        if response.status_code == 201:
-            data = response.json().get("data", {})
-            message = response.json().get("message", "Tidak ada pesan.")
-            translated_message = translate_message(message)
-            print(Fore.GREEN + f"✅ Tugas selesai! Pesan: {translated_message}")
-            print(Fore.CYAN + f"Point: {data.get('point')}, Boost Point: {data.get('boostPoint')}, APY Point: {data.get('apyPoint')}")
-        else:
-            print(Fore.RED + f"❌ Gagal menyelesaikan tugas. Status Code: {response.status_code}")
-    except requests.RequestException as e:
-        print(Fore.RED + f"❌ Kesalahan saat menyelesaikan tugas: {e}")
-
-# Fungsi untuk cek dan buka telur
-def check_and_open_eggs(authorization, cookie):
-    """Cek jumlah telur dan buka semua telur yang tersedia."""
-    headers = {
-        "authorization": authorization,
-        "cookie": cookie,
-        "accept": "application/json, text/plain, */*",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    }
-
-    try:
-        # Cek jumlah telur
-        print(Fore.YELLOW + "🔄 Memeriksa jumlah telur...")
-        response = requests.get("https://mt.promptale.io/rewards/myEggCount", headers=headers)
-        if response.status_code == 200:
-            egg_count = response.json().get("data", 0)
-            message = response.json().get("message", "Tidak ada pesan.")
-            print(Fore.CYAN + f"Pesan: {translate_message(message)}")
-            print(Fore.GREEN + f"✅ Telur ditemukan: {egg_count}")
-
-            # Buka semua telur yang tersedia
-            for i in range(egg_count):
-                print(Fore.YELLOW + f"🔄 Membuka telur ke-{i + 1}...")
-                open_response = requests.post("https://mt.promptale.io/rewards/myEggOpen", headers=headers)
-                if open_response.status_code == 201:
-                    data = open_response.json().get("data", {})
-                    message = open_response.json().get("message", "Tidak ada pesan.")
-                    translated_message = translate_message(message)
-                    print(Fore.GREEN + f"✅ Telur dibuka! Pesan: {translated_message}")
-                    print(Fore.CYAN + f"Hasil: {data.get('codeDesc')} ({data.get('getPoint')} Poin)")
-                else:
-                    print(Fore.RED + f"❌ Gagal membuka telur ke-{i + 1}. Status Code: {open_response.status_code}")
-        else:
-            print(Fore.RED + f"❌ Gagal memeriksa jumlah telur. Status Code: {response.status_code}")
-    except requests.RequestException as e:
-        print(Fore.RED + f"❌ Terjadi kesalahan saat memproses telur: {e}")
-
-# Fungsi utama untuk memproses absensi, data poin, dan tugas
-def perform_task(authorization, cookie):
-    """Mengelola absensi, mengambil poin, menjalankan tugas, dan membuka telur."""
-    headers = {
-        "authorization": authorization,
-        "cookie": cookie,
-        "accept": "application/json, text/plain, */*",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    }
-
-    try:
-        # Cek apakah sudah absensi hari ini
         print(Fore.YELLOW + "🔄 Memeriksa status absensi...")
-        response = requests.get("https://mt.promptale.io/tasks/isAttendanceToday", headers=headers)
-        if response.status_code == 200:
+        response = retry_request(lambda: requests.get(f"{BASE_URL}/tasks/isAttendanceToday", headers=headers))
+        if response and response.status_code == 200:
             message = response.json().get("message", "Tidak ada pesan.")
             print(Fore.GREEN + f"Pesan: {translate_message(message)}")
 
-            if response.json().get("data") is False:
-                # Lakukan absensi
-                print(Fore.GREEN + "✅ Belum absensi. Melakukan absensi...")
-                attend_response = requests.post("https://mt.promptale.io/tasks/attend", headers=headers)
-                if attend_response.status_code == 201:
+            if not response.json().get("data", True):
+                print(Fore.BLUE + "✅ Belum absensi. Melakukan absensi...")
+                attend_response = retry_request(lambda: requests.post(f"{BASE_URL}/tasks/attend", headers=headers))
+                if attend_response and attend_response.status_code == 201:
                     print(Fore.GREEN + "✅ Absensi berhasil!")
                     response_message = attend_response.json().get("message", "Tidak ada pesan.")
                     print(Fore.CYAN + f"Pesan: {translate_message(response_message)}")
                 else:
-                    print(Fore.RED + "❌ Gagal melakukan absensi!")
+                    print(Fore.RED + f"❌ Gagal melakukan absensi. Status: {attend_response.status_code if attend_response else 'Tidak ada respon'}")
+            else:
+                print(Fore.YELLOW + "✅ Sudah absensi hari ini.")
         else:
-            print(Fore.RED + "❌ Gagal memeriksa status absensi.")
+            print(Fore.RED + f"❌ Gagal memeriksa status absensi. Status: {response.status_code if response else 'Tidak ada respon'}")
+    except Exception as e:
+        print(Fore.RED + f"❌ Kesalahan saat memeriksa absensi: {e}")
 
-        # Ambil data poin pengguna
-        print(Fore.YELLOW + "🔄 Mengambil data poin pengguna...")
-        point_response = requests.get("https://mt.promptale.io/main/mypoint", headers=headers)
-        if point_response.status_code == 200:
-            user_data = point_response.json().get("data", {})
-            print(Fore.CYAN + f"Poin: {user_data.get('point')}, Telur: {user_data.get('egg')}")
+# Fungsi fitur utama
+def check_points_and_eggs(auth, cookie):
+    """Memeriksa poin dan telur pengguna."""
+    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
+    try:
+        print(Fore.YELLOW + "🔄 Memeriksa poin dan jumlah telur...")
+        response = retry_request(lambda: requests.get(f"{BASE_URL}/main/mypoint", headers=headers))
+        if response and response.status_code == 200:
+            data = response.json().get("data", {})
+            print(Fore.GREEN + f"✅ Poin: {data.get('point', 0)}, Telur: {data.get('egg', 0)}")
+            if data.get("egg", 0) > 0:
+                open_eggs(auth, cookie, data["egg"])
+        else:
+            print(Fore.RED + f"❌ Gagal memeriksa poin. Status: {response.status_code if response else 'Tidak ada respon'}")
+    except Exception as e:
+        print(Fore.RED + f"❌ Kesalahan saat memeriksa poin: {e}")
 
-            # Jika ada telur, buka semua telur
-            if user_data.get('egg', 0) > 0:
-                check_and_open_eggs(authorization, cookie)
+def open_eggs(auth, cookie, egg_count):
+    """Membuka telur berdasarkan jumlah yang tersedia."""
+    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
+    print(Fore.YELLOW + f"🔄 Membuka {egg_count} telur...")
+    for i in range(egg_count):
+        try:
+            response = retry_request(lambda: requests.post(f"{BASE_URL}/rewards/myEggOpen", headers=headers))
+            if response and response.status_code == 201:
+                data = response.json().get("data", {})
+                message = response.json().get("message", "Tidak ada pesan.")
+                print(Fore.GREEN + f"✅ Telur ke-{i + 1} dibuka! {translate_message(message)}")
+                print(Fore.CYAN + f"Hasil: {data.get('codeDesc')} ({data.get('getPoint')} poin)")
+            else:
+                print(Fore.RED + f"❌ Gagal membuka telur ke-{i + 1}. Status: {response.status_code if response else 'Tidak ada respon'}")
+        except Exception as e:
+            print(Fore.RED + f"❌ Kesalahan saat membuka telur: {e}")
 
-        # Ambil daftar tugas dan jalankan/selesaikan tugas
-        fetch_tasks(authorization, cookie)
+def fetch_and_process_tasks(auth, cookie):
+    """Mengambil dan memproses daftar tugas."""
+    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
+    try:
+        print(Fore.YELLOW + "🔄 Mengambil daftar tugas...")
+        response = retry_request(lambda: requests.get(f"{BASE_URL}/tasks", headers=headers))
+        if response and response.status_code == 200:
+            tasks = response.json().get("data", [])
+            print(Fore.GREEN + f"✅ Ditemukan {len(tasks)} tugas.")
+            
+            for task in tasks:
+                task_title = task.get("taskMainTitle", "Tanpa judul")
+                task_idx = task.get("taskIdx")
+                run_status = task.get("runStatus")
+                complete_count = task.get("completeCount", 0)
 
-    except requests.RequestException as e:
-        print(Fore.RED + f"❌ Terjadi kesalahan saat mengakses API: {e}")
+                # Melewati tugas jika sudah selesai
+                if complete_count > 0:
+                    print(Fore.GREEN + f"✅ Tugas {task_title} sudah selesai. Melewati...")
+                    continue
+
+                # Jika tugas sudah dijalankan, selesaikan
+                if run_status == "S":
+                    print(Fore.BLUE + f"🔄 Menyelesaikan tugas: {task_title} (taskIdx: {task_idx})")
+                    complete_task(auth, cookie, task_idx)
+                else:
+                    print(Fore.YELLOW + f"🔄 Menjalankan tugas baru: {task_title} (taskIdx: {task_idx})")
+                    run_task(auth, cookie, task_idx)
+                time.sleep(2)  # Jeda untuk menghindari spam API
+        else:
+            print(Fore.RED + f"❌ Gagal mengambil daftar tugas. Status: {response.status_code if response else 'Tidak ada respon'}")
+    except Exception as e:
+        print(Fore.RED + f"❌ Kesalahan saat mengambil daftar tugas: {e}")
+
+def run_task(auth, cookie, task_idx):
+    """Menjalankan tugas berdasarkan taskIdx."""
+    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
+    payload = {"taskIdx": task_idx}
+    try:
+        response = retry_request(lambda: requests.post(f"{BASE_URL}/tasks/taskRun", json=payload, headers=headers))
+        if response and response.status_code == 201:
+            print(Fore.GREEN + f"✅ Tugas berhasil dijalankan. Pesan: {translate_message(response.json().get('message', ''))}")
+        else:
+            print(Fore.RED + f"❌ Gagal menjalankan tugas. Status: {response.status_code if response else 'Tidak ada respon'}")
+    except Exception as e:
+        print(Fore.RED + f"❌ Kesalahan saat menjalankan tugas: {e}")
+
+def complete_task(auth, cookie, task_idx):
+    """Menyelesaikan tugas berdasarkan taskIdx."""
+    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
+    payload = {"taskIdx": task_idx}
+    try:
+        response = retry_request(lambda: requests.post(f"{BASE_URL}/tasks/taskComplete", json=payload, headers=headers))
+        if response and response.status_code == 201:
+            data = response.json().get("data", {})
+            print(Fore.GREEN + f"✅ Tugas selesai! Poin: {data.get('point')}")
+        else:
+            print(Fore.RED + f"❌ Gagal menyelesaikan tugas. Status: {response.status_code if response else 'Tidak ada respon'}")
+    except Exception as e:
+        print(Fore.RED + f"❌ Kesalahan saat menyelesaikan tugas: {e}")
+
+# Fitur baru: Cek dan Klaim SL Pass Rewards
+def check_and_claim_sl_pass(auth, cookie):
+    """Memeriksa dan mengklaim hadiah SL Pass gratis."""
+    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
+    try:
+        print(Fore.YELLOW + "🔄 Memeriksa hadiah SL Pass gratis...")
+        response = retry_request(lambda: requests.get(f"{BASE_URL}/rewards/mySlPassList", headers=headers))
+        if response and response.status_code == 200:
+            rewards = response.json().get("data", [])
+            has_unclaimed_rewards = False
+            for reward in rewards:
+                if not reward.get("slPassId", "").startswith("free"):
+                    continue
+                step = reward.get("step", "Tidak diketahui")
+                is_claimed = reward.get("isClaim", False)
+                items = ", ".join(
+                    f"{Fore.CYAN}{item['count']} {item['item']}{Style.RESET_ALL}"
+                    for item in reward.get("getItems", [])
+                )
+
+                if is_claimed:
+                    print(Fore.YELLOW + f"✅ Hadiah SL Pass langkah {step} sudah diklaim: {items}")
+                else:
+                    print(Fore.BLUE + f"🔄 Mengklaim hadiah langkah {step}: {items}")
+                    claim_response = retry_request(lambda: requests.post(
+                        f"{BASE_URL}/rewards/slPassClaim", 
+                        json={"slPassId": reward["slPassId"]}, 
+                        headers=headers
+                    ))
+                    if claim_response and claim_response.status_code == 201:
+                        print(Fore.GREEN + f"✅ Hadiah langkah {step} berhasil diklaim!")
+                        has_unclaimed_rewards = True
+                    else:
+                        print(Fore.RED + f"❌ Gagal mengklaim hadiah langkah {step}")
+            
+            if not has_unclaimed_rewards:
+                print(Fore.YELLOW + "✅ Semua hadiah SL Pass gratis sudah diklaim.")
+        else:
+            print(Fore.RED + f"❌ Gagal memeriksa hadiah SL Pass. Status: {response.status_code if response else 'Tidak ada respon'}")
+    except Exception as e:
+        print(Fore.RED + f"❌ Kesalahan saat memproses SL Pass: {e}")
+
+# Fitur baru: Bermain Game
+def play_games(auth, cookie):
+    """Memeriksa mode permainan yang tersedia dan memainkan permainan."""
+    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
+    try:
+        print(Fore.YELLOW + "🔄 Memeriksa status permainan...")
+        friends_response = retry_request(lambda: requests.get(f"{BASE_URL}/user/friendsCount", headers=headers))
+        if not friends_response or friends_response.status_code != 200:
+            print(Fore.RED + "❌ Gagal memeriksa jumlah teman.")
+            return
+        friends_count = friends_response.json().get("data", 0)
+        print(Fore.CYAN + f"✅ Jumlah teman: {friends_count}")
+
+        available_levels = [
+            level for level in GAMES["LEVELS"]
+            if level == "easy" or friends_count >= GAMES["REQUIREMENTS"].get(level, 0)
+        ]
+
+        for game in GAMES["NAMES"]:
+            print(Fore.YELLOW + f"🔄 Memeriksa status permainan {game}...")
+            game_status_response = retry_request(lambda: requests.get(
+                f"{BASE_URL}/games/status?gameCode={game}", headers=headers
+            ))
+            if not game_status_response or game_status_response.status_code != 200:
+                print(Fore.RED + f"❌ Gagal memeriksa status permainan {game}.")
+                continue
+
+            game_data = game_status_response.json().get("data", [])
+            for level in GAMES["LEVELS"]:
+                level_data = next((d for d in game_data if d["level"] == level), {})
+                remaining_times = level_data.get("dailyTimes", 0) - level_data.get("times", 0)
+                if level in available_levels:
+                    print(Fore.BLUE + f"🔄 Bermain {game} ({level}): {remaining_times} peluang tersisa...")
+                    for i in range(remaining_times):
+                        try:
+                            game_run_response = retry_request(lambda: requests.post(
+                                f"{BASE_URL}/games/gameRun", 
+                                json={"gameId": game, "level": level, "logStatus": "S"}, 
+                                headers=headers
+                            ))
+                            if game_run_response and game_run_response.status_code == 201:
+                                run_idx = game_run_response.json().get("data", "")
+                                game_complete_response = retry_request(lambda: requests.post(
+                                    f"{BASE_URL}/games/gameComplete", 
+                                    json={"gameId": game, "level": level, "runIdx": run_idx}, 
+                                    headers=headers
+                                ))
+                                if game_complete_response and game_complete_response.status_code == 201:
+                                    points = game_complete_response.json().get("data", {}).get("point", 0)
+                                    print(Fore.GREEN + f"✅ Permainan selesai, poin didapat: {points}")
+                            else:
+                                print(Fore.RED + f"❌ Gagal memulai permainan {game} ({level}).")
+                        except Exception as e:
+                            print(Fore.RED + f"❌ Kesalahan saat bermain {game} ({level}): {e}")
+                        time.sleep(2)
+                else:
+                    print(Fore.YELLOW + f"🚫 Level {level} terkunci untuk {game}.")
+    except Exception as e:
+        print(Fore.RED + f"❌ Kesalahan saat memproses permainan: {e}")
 
 # Fungsi hitung mundur 1 hari
 def countdown_timer():
@@ -235,29 +304,26 @@ def countdown_timer():
         time.sleep(1)
     print(Fore.GREEN + "\n🔄 Mengulang proses...")
 
-# Fungsi utama untuk menjalankan semua akun
+# Fungsi utama
 def main():
     print_welcome_message()
     accounts = load_accounts()
     if not accounts:
-        print(Fore.RED + "Tidak ada akun yang ditemukan di data.txt!")
+        print(Fore.RED + "❌ Tidak ada akun ditemukan di data.txt!")
         return
 
-    print(Fore.BLUE + f"🔄 Total Akun: {len(accounts)}")
-
+    print(Fore.CYAN + f"🔄 Memulai proses untuk {len(accounts)} akun...\n")
     for idx, (auth, cookie) in enumerate(accounts, start=1):
         print(Fore.BLUE + f"\n🔄 Memproses akun {idx}/{len(accounts)}...")
-        try:
-            # Gunakan langsung auth dan cookie
-            perform_task(auth, cookie)
-        except Exception as e:
-            print(Fore.RED + f"❌ Kesalahan saat memproses akun {idx}: {e}")
-
-        print(Fore.YELLOW + "⏳ Menunggu 5 detik sebelum akun berikutnya...\n")
+        check_and_attend(auth, cookie)
+        check_points_and_eggs(auth, cookie)
+        fetch_and_process_tasks(auth, cookie)
+        check_and_claim_sl_pass(auth, cookie)
+        play_games(auth, cookie)
         time.sleep(5)
 
+    print(Fore.GREEN + "✅ Semua akun selesai diproses. Mengulang dalam 24 jam...")
     countdown_timer()
-    main()  # Mulai ulang proses setelah 1 hari
 
 if __name__ == "__main__":
     main()
