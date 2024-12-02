@@ -1,7 +1,9 @@
-import time
+from urllib.parse import parse_qs
 import requests
-from colorama import Fore, Style, init
+import json
+import time
 from datetime import datetime, timedelta
+from colorama import Fore, Style, init
 
 # Inisialisasi Colorama
 init(autoreset=True)
@@ -31,19 +33,58 @@ _  _ _   _ ____ ____ _    ____ _ ____ ___  ____ ____ ___
     print(Fore.GREEN + Style.BRIGHT + "Nyari Airdrop  Money Toon")
     print(Fore.YELLOW + Style.BRIGHT + "Telegram: https://t.me/nyariairdrop\n")
 
-# Fungsi untuk memuat akun dari file data.txt
+# Fungsi untuk memuat data akun dari file data.txt
 def load_accounts():
     try:
         with open('data.txt', 'r') as file:
-            lines = [line.strip() for line in file if line.strip()]
-            # Mengelompokkan setiap dua baris sebagai pasangan auth dan cookie
-            if len(lines) % 2 != 0:
-                print(Fore.RED + "❌ Format file data.txt tidak valid! Pastikan setiap akun terdiri dari dua baris (auth dan cookie).")
-                return []
-            return [(lines[i], lines[i + 1]) for i in range(0, len(lines), 2)]
+            return [line.strip() for line in file if line.strip()]
     except FileNotFoundError:
-        print(Fore.RED + "File data.txt tidak ditemukan!")
+        print(Fore.RED + "❌ File data.txt tidak ditemukan! Harap tambahkan file.")
         return []
+
+# Fungsi untuk mengonversi data dari data.txt ke JSON payload
+def convert_to_payload(account_line):
+    try:
+        # Parse URL-encoded data menjadi dictionary
+        parsed_data = parse_qs(account_line)
+        init_data = account_line  # Data asli tetap digunakan
+        init_data_unsafe = {
+            "authDate": datetime.utcfromtimestamp(int(parsed_data.get("auth_date", [0])[0])).isoformat() + "Z",
+            "chatInstance": parsed_data.get("chat_instance", [""])[0],
+            "chatType": parsed_data.get("chat_type", [""])[0],
+            "hash": parsed_data.get("hash", [""])[0],
+            "startParam": parsed_data.get("start_param", [""])[0],
+            "user": json.loads(parsed_data.get("user", ["{}"])[0])
+        }
+        return {"initData": init_data, "initDataUnsafe": init_data_unsafe}
+    except Exception as e:
+        print(Fore.RED + f"❌ Kesalahan saat mengonversi payload: {e}")
+        return None
+
+# Fungsi untuk login dan mendapatkan accessToken
+def login_and_get_token(account_line):
+    print(Fore.YELLOW + "🔄 Melakukan login...")
+    try:
+        payload = convert_to_payload(account_line)
+        if not payload:
+            print(Fore.RED + "❌ Gagal mengonversi data akun. Melewati akun ini.")
+            return None
+
+        response = requests.post(f"{BASE_URL}/auth/loginTg", headers=HEADERS_TEMPLATE, json=payload)
+        if response.status_code == 201:
+            data = response.json()
+            if data.get("success"):
+                access_token = data["data"]["accessToken"]
+                user_name = data["data"]["user"]["userName"]  # Ambil nama pengguna
+                print(Fore.GREEN + f"✅ Login berhasil! Nama Pengguna: {user_name}")
+                return access_token
+            else:
+                print(Fore.RED + "❌ Login gagal! Periksa data akun.")
+        else:
+            print(Fore.RED + f"❌ Gagal login. Status: {response.status_code}")
+    except Exception as e:
+        print(Fore.RED + f"❌ Kesalahan saat login: {e}")
+    return None
 
 # Fungsi untuk menerjemahkan pesan
 def translate_message(message, target_language="id"):
@@ -71,9 +112,9 @@ def retry_request(func, retries=2, delay=2):
             time.sleep(delay)
     return None
 
-def check_and_attend(auth, cookie):
+def check_and_attend(access_token):
     """Memeriksa dan melakukan absensi jika belum dilakukan."""
-    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
+    headers = {**HEADERS_TEMPLATE, "authorization": f"Bearer {access_token}"}
     try:
         print(Fore.YELLOW + "🔄 Memeriksa status absensi...")
         response = retry_request(lambda: requests.get(f"{BASE_URL}/tasks/isAttendanceToday", headers=headers))
@@ -98,9 +139,9 @@ def check_and_attend(auth, cookie):
         print(Fore.RED + f"❌ Kesalahan saat memeriksa absensi: {e}")
 
 # Fungsi fitur utama
-def check_points_and_eggs(auth, cookie):
+def check_points_and_eggs(access_token):
     """Memeriksa poin dan telur pengguna."""
-    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
+    headers = {**HEADERS_TEMPLATE, "authorization": f"Bearer {access_token}"}
     try:
         print(Fore.YELLOW + "🔄 Memeriksa poin dan jumlah telur...")
         response = retry_request(lambda: requests.get(f"{BASE_URL}/main/mypoint", headers=headers))
@@ -108,15 +149,15 @@ def check_points_and_eggs(auth, cookie):
             data = response.json().get("data", {})
             print(Fore.GREEN + f"✅ Poin: {data.get('point', 0)}, Telur: {data.get('egg', 0)}")
             if data.get("egg", 0) > 0:
-                open_eggs(auth, cookie, data["egg"])
+                open_eggs(access_token, data["egg"])
         else:
             print(Fore.RED + f"❌ Gagal memeriksa poin. Status: {response.status_code if response else 'Tidak ada respon'}")
     except Exception as e:
         print(Fore.RED + f"❌ Kesalahan saat memeriksa poin: {e}")
 
-def open_eggs(auth, cookie, egg_count):
+def open_eggs(access_token, egg_count):
     """Membuka telur berdasarkan jumlah yang tersedia."""
-    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
+    headers = {**HEADERS_TEMPLATE, "authorization": f"Bearer {access_token}"}
     print(Fore.YELLOW + f"🔄 Membuka {egg_count} telur...")
     for i in range(egg_count):
         try:
@@ -131,9 +172,9 @@ def open_eggs(auth, cookie, egg_count):
         except Exception as e:
             print(Fore.RED + f"❌ Kesalahan saat membuka telur: {e}")
 
-def fetch_and_process_tasks(auth, cookie):
+def fetch_and_process_tasks(access_token):
     """Mengambil dan memproses daftar tugas."""
-    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
+    headers = {**HEADERS_TEMPLATE, "authorization": f"Bearer {access_token}"}
     try:
         print(Fore.YELLOW + "🔄 Mengambil daftar tugas...")
         response = retry_request(lambda: requests.get(f"{BASE_URL}/tasks", headers=headers))
@@ -155,19 +196,19 @@ def fetch_and_process_tasks(auth, cookie):
                 # Jika tugas sudah dijalankan, selesaikan
                 if run_status == "S":
                     print(Fore.BLUE + f"🔄 Menyelesaikan tugas: {task_title} (taskIdx: {task_idx})")
-                    complete_task(auth, cookie, task_idx)
+                    complete_task(access_token, task_idx)
                 else:
                     print(Fore.YELLOW + f"🔄 Menjalankan tugas baru: {task_title} (taskIdx: {task_idx})")
-                    run_task(auth, cookie, task_idx)
+                    run_task(access_token, task_idx)
                 time.sleep(2)  # Jeda untuk menghindari spam API
         else:
             print(Fore.RED + f"❌ Gagal mengambil daftar tugas. Status: {response.status_code if response else 'Tidak ada respon'}")
     except Exception as e:
         print(Fore.RED + f"❌ Kesalahan saat mengambil daftar tugas: {e}")
 
-def run_task(auth, cookie, task_idx):
+def run_task(access_token, task_idx):
     """Menjalankan tugas berdasarkan taskIdx."""
-    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
+    headers = {**HEADERS_TEMPLATE, "authorization": f"Bearer {access_token}"}
     payload = {"taskIdx": task_idx}
     try:
         response = retry_request(lambda: requests.post(f"{BASE_URL}/tasks/taskRun", json=payload, headers=headers))
@@ -178,9 +219,9 @@ def run_task(auth, cookie, task_idx):
     except Exception as e:
         print(Fore.RED + f"❌ Kesalahan saat menjalankan tugas: {e}")
 
-def complete_task(auth, cookie, task_idx):
+def complete_task(access_token, task_idx):
     """Menyelesaikan tugas berdasarkan taskIdx."""
-    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
+    headers = {**HEADERS_TEMPLATE, "authorization": f"Bearer {access_token}"}
     payload = {"taskIdx": task_idx}
     try:
         response = retry_request(lambda: requests.post(f"{BASE_URL}/tasks/taskComplete", json=payload, headers=headers))
@@ -193,9 +234,9 @@ def complete_task(auth, cookie, task_idx):
         print(Fore.RED + f"❌ Kesalahan saat menyelesaikan tugas: {e}")
 
 # Fitur baru: Cek dan Klaim SL Pass Rewards
-def check_and_claim_sl_pass(auth, cookie):
+def check_and_claim_sl_pass(access_token):
     """Memeriksa dan mengklaim hadiah SL Pass gratis."""
-    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
+    headers = {**HEADERS_TEMPLATE, "authorization": f"Bearer {access_token}"}
     try:
         print(Fore.YELLOW + "🔄 Memeriksa hadiah SL Pass gratis...")
         response = retry_request(lambda: requests.get(f"{BASE_URL}/rewards/mySlPassList", headers=headers))
@@ -235,9 +276,9 @@ def check_and_claim_sl_pass(auth, cookie):
         print(Fore.RED + f"❌ Kesalahan saat memproses SL Pass: {e}")
 
 # Fitur baru: Bermain Game
-def play_games(auth, cookie):
+def play_games(access_token):
     """Memeriksa mode permainan yang tersedia dan memainkan permainan."""
-    headers = {**HEADERS_TEMPLATE, "authorization": auth, "cookie": cookie}
+    headers = {**HEADERS_TEMPLATE, "authorization": f"Bearer {access_token}"}
     try:
         print(Fore.YELLOW + "🔄 Memeriksa status permainan...")
         friends_response = retry_request(lambda: requests.get(f"{BASE_URL}/user/friendsCount", headers=headers))
@@ -313,13 +354,15 @@ def main():
         return
 
     print(Fore.CYAN + f"🔄 Memulai proses untuk {len(accounts)} akun...\n")
-    for idx, (auth, cookie) in enumerate(accounts, start=1):
+    for idx, account in enumerate(accounts, start=1):
         print(Fore.BLUE + f"\n🔄 Memproses akun {idx}/{len(accounts)}...")
-        check_and_attend(auth, cookie)
-        check_points_and_eggs(auth, cookie)
-        fetch_and_process_tasks(auth, cookie)
-        check_and_claim_sl_pass(auth, cookie)
-        play_games(auth, cookie)
+        access_token = login_and_get_token(account)
+        if access_token:
+            check_and_attend(access_token)
+            check_points_and_eggs(access_token)
+            fetch_and_process_tasks(access_token)
+            check_and_claim_sl_pass(access_token)
+            play_games(access_token)
         time.sleep(5)
 
     print(Fore.GREEN + "✅ Semua akun selesai diproses. Mengulang dalam 24 jam...")
