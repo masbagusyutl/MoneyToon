@@ -369,4 +369,6 @@ def main():
     countdown_timer()
 
 if __name__ == "__main__":
-    main()
+    while True:
+        main()
+        countdown_timer()
